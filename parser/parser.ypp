@@ -1,0 +1,288 @@
+%error-verbose
+%locations
+%{
+#include "ast.h"
+extern int ErrorCharNum;
+extern int yylineno;
+extern char *yytext;
+extern FILE *yyin;
+void yyerror(const char* fmt, ...);
+extern "C" int yylex();
+#define SavePosition t->Line=yylloc.first_line;t->Column=yylloc.first_column
+typedef struct YYLVAL
+ {
+	int         type_int;
+	float       type_float;
+    char        type_char;
+	char        type_id[32];
+    
+
+	ProgAST     *program;
+	vector <ExtDefAST *> ExtDefList;  	    //外部定义（外部变量、函数）列表
+    ExtDefAST   *ExtDef;
+    vector <VarDecAST*>  ExtDecList;        //外部、局部变量列表
+    TypeAST     *Specifier;
+    VarDecAST *VarDec;
+    CompStmAST  *CompSt;
+	vector <ParamAST *>  ParamList;         //形参列表
+	ParamAST *ParamDec;
+
+	vector <StmAST *>   StmList;
+	StmAST      *Stmt;
+	vector <DefAST *>   DefList;
+	DefAST      *Def;
+    vector <VarDecAST *> DecList;
+    VarDecAST   *Dec;
+    ExpAST      *Exp;
+	vector <ExpAST *>    Args;       	//实参列表
+    ArrExpAST   *ArrExp;       //数组表达式
+    VarAST      *ArrVar;
+}YYLVAL;
+#define YYSTYPE YYLVAL
+
+%}
+
+%union{
+    int         type_int;
+	float       type_float;
+    char        type_char;
+	char        type_id[32];
+    
+	ProgAST     *program;
+	vector <ExtDefAST *> ExtDefList;  	    //外部定义（外部变量、函数）列表
+    ExtDefAST   *ExtDef;
+    vector <VarDecAST*>  ExtDecList;        //外部、局部变量列表
+    TypeAST     *Specifier;
+    VarDecAST *VarDec;
+    CompStmAST  *CompSt;
+	vector <ParamAST *>  ParamList;         //形参列表
+	ParamAST *ParamDec;
+
+	vector <StmAST *>   StmList;
+	StmAST      *Stmt;
+	vector <DefAST *>   DefList;
+	DefAST      *Def;
+    vector <VarDecAST *> DecList;
+    VarDecAST   *Dec;
+    ExpAST      *Exp;
+	vector <ExpAST *>    Args;       	//实参列表
+    ArrExpAST   *ArrExp;       //数组表达式
+    VarAST      *ArrVar;
+}
+//  %type 定义非终结符的语义值类型
+%type  <program>    program
+%type  <ExtDefList> ExtDefList
+%type  <ExtDef>     ExtDef
+%type  <ExtDecList> ExtDecList
+%type  <Specifier>  Specifier
+%type  <VarDec>     VarDec
+%type  <CompSt>     CompSt
+%type  <ParamList>  ParamList
+%type  <ParamDec>   ParamDec
+%type  <DefList>    DefList
+%type  <StmList>    StmList
+%type  <Stmt>       Stmt
+%type  <Def>        Def
+%type  <DecList>    DecList
+%type  <Dec>        Dec
+%type  <Exp>        Exp
+%type  <ArrExp>     ArrExp
+%type  <ArrVar>     ArrVar
+%type  <Args>  Args
+
+
+//% token 定义终结符的语义值类型
+%token <type_int> INT                   /*指定INT常量的语义值是type_int，由词法分析得到的整数数值*/
+%token <type_id>  ID TYPE               /*指定ID 的语义值是type_id，由词法分析得到的标识符字符串*/
+%token <type_float> FLOAT               /*指定float常量的语义值是type_float*/
+%token <type_char> CHAR
+
+%token DPLUS DMINUS LP RP LB RB LC RC SEMI COMMA     /*用bison对该文件编译时，带参数-d，生成的exp.tab.h中给这些单词进行编码，可在lex.l中包含parser.tab.h使用这些单词种类码*/
+%token PLUS MINUS STAR DIV GE GT LE LT NE EQ ASSIGN AND OR NOT IF ELSE WHILE RETURN FOR COLON STRUCT BREAK CONTINUE
+
+/*以下为接在上述token后依次编码的枚举常量，用于后续过程*/
+%token EXT_DEF_LIST EXT_VAR_DEF FUNC_DEF FUNC_DEC EXT_DEC_LIST PARAM_LIST PARAM_DEC VAR_DEF DEC_LIST DEF_LIST COMP_STM STM_LIST EXP_STMT IF_THEN IF_THEN_ELSE
+%token FUNC_CALL ARGS FUNCTION PARAM ARG CALL CALL0 LABEL GOTO JLT JLE JGT JGE JEQ JNE END READARRAY WRITEARRAY
+
+
+%left ASSIGN
+%left OR
+%left AND
+%left LT LE GT GE
+%left NE EQ
+%left PLUS MINUS
+%left STAR DIV
+%right UMINUS NOT DPLUS UPLUS DMINUS
+
+%nonassoc LOWER_THEN_ELSE
+%nonassoc ELSE
+
+
+%%
+
+program: ExtDefList{
+                        $$=new ProgAST(); $$->ExtDefs=$1;
+                        if (Errors::IsEmpty()&&  ErrorCharNum==0)
+                        {$$->DisplayAST(0);}    //无词法、语法错误显示语法树
+                        else {Errors::ErrorsDisplay();return 0;}
+                        $$->Semantics0();                   //静态语义检查
+                        if (Errors::IsEmpty())
+                            $$->GenIR();                    //中间代码生成
+                        
+                        system("pause");
+                    }
+         ;
+ExtDefList: {$$=vector <ExtDefAST*>();}
+          | ExtDef ExtDefList {$2.insert($2.begin(),$1);$$=$2;}     //将ExtDef所指外部定义对象增加到（程序对象的）ExtDefList中
+          ;
+
+ExtDef:   Specifier ExtDecList SEMI   { ExtVarDefAST *t=new ExtVarDefAST();     //创建一个外部变量声明的对象
+                                        t->Type=$1; t->ExtVars=$2;$$=t;SavePosition;}
+  //       | StructSpecifier SEMI   {}
+//         | StructSpecifier ExtDecList SEMI   {}
+         | Specifier ID LP ParamList RP CompSt  {FuncDefAST *t=new FuncDefAST();t->Type=$1;t->Name=$2;t->Params=$4; t->Body=$6;$$=t;SavePosition;}//对应一个函数定义对象
+         | Specifier ID LP ParamList RP SEMI   {FuncDefAST *t=new FuncDefAST();t->Type=$1;t->Name=$2;t->Params=$4;$$=t;SavePosition;}//对应一个函数声明对象，Body为空
+         ;
+Specifier: TYPE  {  BasicTypeAST *t=new BasicTypeAST();
+                    if (string($1)==string("int")){t->Type=T_INT;}
+                    if (string($1)==string("float")){t->Type=T_FLOAT;}
+                    if (string($1)==string("void")){t->Type=T_VOID;}
+                    if (string($1)==string("char")){t->Type=T_CHAR;}
+                    $$=t;SavePosition;}
+              ;
+
+/* StructSpecifier: STRUCT ID  LC ExtDefList RC{}
+                |STRUCT ID{} */
+            ;
+ExtDecList:  VarDec  {$$=vector < VarDecAST*>();$$.push_back($1);}      /*ExtDecList对应一个外部变量VarDec的序列,目前后续只考虑是标识符，可扩展为数组*/
+           | VarDec COMMA ExtDecList {$3.insert($3.begin(),$1);$$=$3;}
+           ;
+VarDec:  ID   {$$=new VarDecAST();$$->Name=string($1);$$->Line=yylloc.first_line;$$->Column=yylloc.first_column;}             //变量对象，dims.size()为0表示简单变量，大于0表示数组
+          | VarDec LB INT RB   {$1->Dims.push_back($3);$$=$1;} //将数组的每维大小添加到属性Dims中
+          ;
+
+ParamList: {$$=vector < ParamAST *>();}
+        | ParamDec  {$$=vector < ParamAST *>(); $$.push_back($1); }    //初始化形式参数序列
+        | ParamList COMMA  ParamDec  {$1.push_back($3); $$=$1;}         //添加一个形式参数
+        ;
+ParamDec: Specifier VarDec         {$$=new ParamAST();$$->Type=$1;$$->ParamName=$2;$$->Line=yylloc.first_line;$$->Column=yylloc.first_column;}
+         ;
+
+CompSt: LC DefList StmList RC    {$$=new CompStmAST();$$->Decls=$2;$$->Stms=$3;$$->Line=yylloc.first_line;$$->Column=yylloc.first_column;}
+       ;
+StmList: {$$=vector <StmAST *>(); }
+        | Stmt StmList  {$$=$2;$$.insert($$.begin(),$1)}
+        ;
+DefList: {$$=vector <DefAST *>();  }
+        | Def DefList {$$=$2;$$.insert($$.begin(),$1);}
+        ;
+Def:   Specifier DecList SEMI {$$=new DefAST();$$->Type=$1;$$->LocVars=$2;
+                               $$->Line=yylloc.first_line;$$->Column=yylloc.first_column;}
+       | error SEMI   {$$=NULL;}
+              ;
+DecList: Dec  {$$=vector <VarDecAST *>(); $$.push_back($1);}
+       | Dec COMMA DecList  {$$=$3;$$.insert($$.begin(),$1);}
+	   ;
+Dec:  VarDec  {$$=$1;}                  //如何将多种形式的局部变量加上一个父类，简单，数组，初始化
+       | VarDec ASSIGN Exp  {$$=$1;$$->Exp=$3; }      //带初始化的变量定义
+       | VarDec ASSIGN LC ArrExp RC     {$$ = $1; $$->Exp=$4;}
+      ;
+ArrExp: Exp{
+            ArrExpAST *t = new ArrExpAST();
+            t->IniList.push_back($1);
+            $$=t;
+            SavePosition;
+        }
+       |LC ArrExp RC{
+            ArrExpAST *t = new ArrExpAST();
+            t->IniList.push_back($2);
+            $$=t;
+            SavePosition;
+       }
+       |ArrExp COMMA LC ArrExp RC{
+            $$ = $1;
+            $$->IniList.push_back($4);
+       }
+       |ArrExp COMMA Exp{
+            $$ = $1;
+            $$->IniList.push_back($3);
+       }
+       ;
+
+
+Stmt:   Exp SEMI    		{ExprStmAST *t=new ExprStmAST();t->Exp=$1;$$=t;SavePosition;}
+      | CompSt      		{$$=$1;}      //复合语句不再生成新的结点
+      | RETURN Exp SEMI   	{ReturnStmAST *t=new ReturnStmAST();t->Exp=$2;$$=t;SavePosition;}
+      | RETURN SEMI   	    {ReturnStmAST *t=new ReturnStmAST();t->Exp=NULL;$$=t;SavePosition;}
+      | IF LP Exp RP Stmt %prec LOWER_THEN_ELSE {IfStmAST *t=new IfStmAST();t->Cond=$3;t->ThenStm=$5;$$=t; SavePosition;}
+      | IF LP Exp RP Stmt ELSE Stmt   		    {IfElseStmAST *t=new IfElseStmAST();t->Cond=$3;t->ThenStm=$5;t->ElseStm=$7;$$=t;SavePosition;}
+      | WHILE LP Exp RP Stmt 	{WhileStmAST *t=new WhileStmAST();t->Cond=$3;t->Body=$5;$$=t; SavePosition;}
+      | FOR LP Exp SEMI Exp SEMI Exp RP Stmt{ForStmAST *t=new ForStmAST();t->Head=$3;t->Cond=$5;t->End=$7;t->Body=$9;$$=t; SavePosition;}
+      | BREAK SEMI  {BreakStmAST* t=new BreakStmAST();$$=t;SavePosition;}
+      | CONTINUE SEMI {ContinueStmAST* t=new ContinueStmAST();$$=t;SavePosition;}
+      //| error SEMI   {$$=NULL;}
+      ;
+
+Exp:    Exp ASSIGN Exp {AssignAST *t=new AssignAST();t->Op=ASSIGN;
+                t->LeftValExp=$1;t->RightValExp=$3;$$=t;SavePosition;}
+      | Exp PLUS Exp {BinaryExprAST *t=new BinaryExprAST();t->Op=PLUS;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;}    //算术运算符
+      | Exp MINUS Exp{BinaryExprAST *t=new BinaryExprAST();t->Op=MINUS;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;}
+      | Exp STAR Exp {BinaryExprAST *t=new BinaryExprAST();t->Op=STAR;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;}
+      | Exp DIV Exp  {BinaryExprAST *t=new BinaryExprAST();t->Op=DIV;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;}
+      | LP Exp RP    {$$=$2;}
+      | MINUS Exp %prec UMINUS  {UnaryExprAST *t=new UnaryExprAST();t->Op=UMINUS;t->Exp=$2;$$=t;SavePosition;}  //单目减
+      | PLUS Exp %prec UPLUS    {UnaryExprAST *t=new UnaryExprAST();t->Op=UPLUS;t->Exp=$2;$$=t;SavePosition;}   //单目加
+
+      | Exp AND Exp   {BinaryExprAST *t=new BinaryExprAST();t->Op=AND;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;} //逻辑运算符
+      | Exp OR Exp    {BinaryExprAST *t=new BinaryExprAST();t->Op=OR;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;}
+      | NOT Exp       {UnaryExprAST *t=new UnaryExprAST();t->Op=NOT;t->Exp=$2;$$=t;SavePosition;}
+
+      | Exp GT Exp	{BinaryExprAST *t=new BinaryExprAST();t->Op=GT;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;}  //关系运算符
+      | Exp GE Exp 	{BinaryExprAST *t=new BinaryExprAST();t->Op=GE;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;}
+      | Exp LT Exp 	{BinaryExprAST *t=new BinaryExprAST();t->Op=LT;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;}
+      | Exp LE Exp 	{BinaryExprAST *t=new BinaryExprAST();t->Op=LE;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;}
+      | Exp NE Exp 	{BinaryExprAST *t=new BinaryExprAST();t->Op=NE;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;}
+      | Exp EQ Exp 	{BinaryExprAST *t=new BinaryExprAST();t->Op=EQ;t->LeftExp=$1;t->RightExp=$3;$$=t;SavePosition;}
+
+
+      | DPLUS  Exp      {UnaryExprAST *t=new UnaryExprAST();t->Op=DPLUS;t->Exp=$2;$$=t;SavePosition;}    //自增、自减运算符。。。可区分前后缀形式
+      | DMINUS Exp      {UnaryExprAST *t=new UnaryExprAST();t->Op=DMINUS;t->Exp=$2;$$=t;SavePosition;}
+
+      | ID LP Args RP 	{FuncCallAST *t=new FuncCallAST();t->Name=$1;t->Params=$3;$$=t;SavePosition;}
+      | ID            	{VarAST *t=new VarAST();t->Name=$1;$$=t;SavePosition;}
+      | INT           	{ConstAST *t=new ConstAST();t->Type=T_INT;t->ConstVal.constINT=$1;$$=t;SavePosition;}
+      | FLOAT         	{ConstAST *t=new ConstAST();t->Type=T_FLOAT;t->ConstVal.constFLOAT=$1;$$=t;SavePosition;}
+      | CHAR            {ConstAST *t=new ConstAST();t->Type=T_CHAR;t->ConstVal.constCHAR=$1;$$=t;SavePosition;}
+      | ArrVar          {$$=$1;}
+      //| error SEMI   {$$=NULL;}
+       ;
+ArrVar: ID LB Exp RB{   
+                        VarAST *t=new VarAST();
+                        t->Name=$1;
+                        t->index.push_back($3);
+                        $$=t;
+                        SavePosition;
+                    }
+        | ArrVar LB Exp RB{ $$=$1;
+                            $$->index.push_back($3);}
+
+Args:   {}
+       |  Exp {$$=vector <ExpAST *>(); $$.push_back($1); }
+       |  Args COMMA  Exp   {$$=$1;$$.push_back($3);}
+       ;
+
+%%
+
+int main(int argc, char *argv[]){
+	yyin=fopen(argv[1],"r");
+	if (!yyin) return 0;
+	yylineno=1;
+	yyparse();
+	return 0;
+}
+
+#include<stdarg.h>
+void yyerror(const char* fmt, ...)
+{
+    Errors::ErrorAdd(yylloc.first_line,yylloc.first_column,fmt);
+}
